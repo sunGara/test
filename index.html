@@ -266,16 +266,31 @@ btnShowQR.addEventListener('click', ()=> {
 });
 
 btnOpenWifi.addEventListener('click', ()=> {
-  // Попытка открыть настройки Wi-Fi на Android через intent. Работает в Chrome/Android.
-  const intent = "intent://#Intent;action=android.settings.WIFI_SETTINGS;end";
-  // Для iOS/других платформ — показать инструкцию
-  if (navigator.userAgent.toLowerCase().includes('android')) {
-    window.location.href = intent;
-  } else {
-    alert('Откройте настройки Wi-Fi вручную и выберите сеть: ' + ssidEl.textContent);
+const ua = navigator.userAgent.toLowerCase();
+
+  // Android Chrome: открыть системные настройки Wi-Fi
+  if (ua.includes("android") && ua.includes("chrome")) {
+    window.location.href = "intent:#Intent;action=android.settings.WIFI_SETTINGS;end";
+    return;
   }
+
+  // Android другие браузеры
+  if (ua.includes("android")) {
+    alert("Откройте настройки Wi-Fi вручную. Ваши данные уже отображены.");
+    return;
+  }
+
+  // iPhone / iPad
+  if (/iphone|ipad|ipod/.test(ua)) {
+    alert("iOS запрещает открывать настройки Wi-Fi из браузера. Подключитесь вручную по QR-коду.");
+    return;
+  }
+
+  // Desktop fallback
+  alert("Откройте настройки Wi-Fi вручную. Браузер не поддерживает автоматический переход.");
 });
 </script>
 </body>
 </html>
+
 
