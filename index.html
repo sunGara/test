@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WiFi Helper (Web)</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Roboto,Arial; margin:0; padding:16px; background:#f7f7f7}
+  .controls{display:flex;gap:8px; margin-bottom:12px; flex-wrap:wrap}
+  button{padding:10px 12px; font-size:16px}
+  #video{width:100%; max-height:60vh; background:#000}
+  #out{background:#fff;padding:12px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,.08); margin-top:12px}
+  .cred{font-weight:600; word-break:break-all}
+  .small{font-size:13px; color:#555}
+  #qrcode{margin-top:10px}
+</style>
+</head>
+<body>
+  <h3>Wi-Fi helper (web)</h3>
+  <div class="controls">
+    <button id="btnStart">Сканировать QR (камера)</button>
+    <button id="btnPhoto">Сфоткать для OCR</button>
+    <button id="btnStop">Остановить камеру</button>
+  </div>
+
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas" style="display:none"></canvas>
+
+  <div id="out" hidden>
+    <div class="small">SSID:</div>
+    <div class="cred" id="ssid"></div>
+    <div class="small" style="margin-top:8px">Пароль:</div>
+    <div class="cred" id="pass"></div>
+
+    <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
+      <button id="btnCopy">Копировать пароль</button>
+      <button id="btnShowQR">Показать/Скрыть QR</button>
+      <button id="btnOpenWifi">Открыть настройки Wi-Fi</button>
+    </div>
+    <div id="qrcode" hidden></div>
+    <div class="small" style="margin-top:8px">Примечание: браузер не может автоматически подключить устройство. Нажмите «Открыть настройки Wi-Fi» и введите пароль вручную или отсканируйте QR другим устройством.</div>
+  </div>
+
+<script src="https://unpkg.com/jsqr/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.3/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let stream = null;
+let scanning = false;
+const btnStart = document.getElementById('btnStart');
+const btnPhoto = document.getElementById('btnPhoto');
+const btnStop = document.getElementById('btnStop');
+const out = document.getElementById('out');
+const ssidEl = document.getElementById('ssid');
+const passEl = document.getElementById('pass');
+const btnCopy = document.getElementById('btnCopy');
+const btnShowQR = document.getElementById('btnShowQR');
+const qrcodeDiv = document.getElementById('qrcode');
+const btnOpenWifi = document.getElementById('btnOpenWifi');
+
+function parseWifiQr(raw) {
+  // Простой парсер формата WIFI:T:WPA;S:SSID;P:password;; (чувствительный к формату)
+  try {
+    const re = /WIFI:T:(.*?);S:(.*?);P:(.*?);/i;
+    const m = raw.match(re);
+    if (m) return {ssid: m[2], pass: m[3]};
+  } catch(e){}
+  return null;
+}
+
+function parseFromText(text) {
+  // простая эвристика: ищем строки с ssid или password
+  const lines = text.split('\\n').map(s=>s.trim()).filter(Boolean);
+  let s=null,p=null;
+  for (const ln of lines) {
+    const low = ln.toLowerCase();
+    if (!s && (low.includes('ssid') || low.includes('network') || low.includes('ssid:'))) {
+      s = ln.split(':').pop().trim();
+    }
+    if (!p && (low.includes('password') || low.includes('pass') || low.includes('pwd'))) {
+      p = ln.split(':').pop().trim();
+    }
+  }
+  return (s ? {ssid:s, pass:p||''} : null);
+}
+
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})
+    video.srcObject = stream;
+    scanning = true;
+    video.play();
+    requestAnimationFrame(scanFrame);
+  } catch(e){
+    alert('Не удалось открыть камеру: ' + e.message);
+  }
+}
+
+function stopCamera() {
+  scanning = false;
+  if (stream) {
+    stream.getTracks().forEach(t=>t.stop());
+    stream = null;
+  }
+  video.srcObject = null;
+}
+
+function scanFrame() {
+  if (!scanning) return;
+  const w = video.videoWidth, h = video.videoHeight;
+  if (w && h) {
+    canvas.width = w; canvas.height = h;
+    ctx.drawImage(video,0,0,w,h);
+    const img = ctx.getImageData(0,0,w,h);
+    const code = jsQR(img.data, w, h, { inversionAttempts: "attemptBoth" });
+    if (code) {
+      // найден QR
+      handleRaw(code.data);
+      stopCamera();
+      return;
+    }
+  }
+  requestAnimationFrame(scanFrame);
+}
+
+function handleRaw(raw) {
+  // попытка распарсить WiFi QR
+  let info = parseWifiQr(raw);
+  if (info) return showInfo(info.ssid, info.pass);
+  // если строка не WiFi QR — показать строку как найденную и предложить OCR fallback
+  // но чаще роутер содержит WiFi QR — всё хорошо
+  // также можно попытаться parseFromText(raw)
+  const textInfo = parseFromText(raw);
+  if (textInfo) return showInfo(textInfo.ssid, textInfo.pass);
+  alert('QR найден, но не в формате WiFi. Содержимое:\\n' + raw);
+}
+
+function showInfo(ssid, pass) {
+  out.hidden = false;
+  ssidEl.textContent = ssid || '';
+  passEl.textContent = pass || '';
+  // prepare QR
+  qrcodeDiv.innerHTML = '';
+  new QRCode(qrcodeDiv, {
+    text: `WIFI:T:WPA;S:${ssid};P:${pass};;`,
+    width: 240, height: 240
+  });
+}
+
+btnStart.addEventListener('click', ()=> {
+  out.hidden = true; qrcodeDiv.hidden = true;
+  startCamera();
+});
+
+btnStop.addEventListener('click', ()=> stopCamera());
+
+btnPhoto.addEventListener('click', async ()=>{
+  // открываем камеру, делаем один кадр (видим как ACTION_IMAGE_CAPTURE альтернативу)
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    const vt = document.createElement('video');
+    vt.srcObject = s;
+    await vt.play();
+    // подождать кадр
+    await new Promise(r => setTimeout(r, 300));
+    const w = vt.videoWidth, h = vt.videoHeight;
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').drawImage(vt,0,0,w,h);
+    s.getTracks().forEach(t=>t.stop());
+    const dataUrl = tmp.toDataURL('image/jpeg', 0.9);
+
+    // сначала попробовать считать QR из фото
+    const img = new Image();
+    img.src = dataUrl;
+    img.onload = () => {
+      // draw to canvas for jsQR
+      const c2 = canvas; c2.width = img.width; c2.height = img.height;
+      c2.getContext('2d').drawImage(img,0,0);
+      const imd = c2.getContext('2d').getImageData(0,0,c2.width,c2.height);
+      const code = jsQR(imd.data, c2.width, c2.height);
+      if (code) { handleRaw(code.data); return; }
+      // если QR не найден — OCR
+      performOcr(dataUrl);
+    };
+  } catch(e){
+    alert('Не удалось сделать фото: ' + e.message);
+  }
+});
+
+async function performOcr(dataUrl) {
+  try {
+    out.hidden = true;
+
+    // 1) modern API: createWorker (recommended)
+    if (window.Tesseract && typeof Tesseract.createWorker === 'function') {
+      const worker = Tesseract.createWorker({ logger: m => { /* optional: console.log(m) */ } });
+      await worker.load();                    // может скачать движок
+      await worker.loadLanguage('eng');       // загрузить модель языка
+      await worker.initialize('eng');         // инициализировать
+      const { data: { text } } = await worker.recognize(dataUrl);
+      await worker.terminate();
+      const tinfo = parseFromText(text);
+      if (tinfo) {
+        showInfo(tinfo.ssid, tinfo.pass);
+      } else {
+        alert('OCR выполнен, но SSID/PASS не найдены. Результат:\n' + text.slice(0, 1000));
+      }
+      return;
+    }
+
+    // 2) fallback: Tesseract.recognize (старые сборки)
+    if (window.Tesseract && typeof Tesseract.recognize === 'function') {
+      // опция logger необязательна
+      const res = await Tesseract.recognize(dataUrl, 'eng', { logger: m => { /* optional */ } });
+      // в разных версиях структура ответа различается
+      const text = (res && (res.data?.text || res.text)) || '';
+      const tinfo = parseFromText(text);
+      if (tinfo) {
+        showInfo(tinfo.ssid, tinfo.pass);
+      } else {
+        alert('OCR выполнен (fallback), но SSID/PASS не найдены. Результат:\n' + text.slice(0, 1000));
+      }
+      return;
+    }
+
+    // 3) если Tesseract отсутствует или сборка неполная
+    alert('OCR недоступен: загруженная версия Tesseract.js не содержит createWorker или recognize. ' +
+          'Замените <script> на рабочую сборку (например, https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js) ' +
+          'или используйте fallback путь.');
+  } catch (e) {
+    alert('OCR error: ' + (e && e.message ? e.message : e));
+  }
+}
+
+
+btnCopy.addEventListener('click', async () => {
+  const pass = passEl.textContent || '';
+  try {
+    await navigator.clipboard.writeText(pass);
+    alert('Пароль скопирован в буфер обмена');
+  } catch {
+    alert('Не удалось скопировать (браузер не поддерживает clipboard API)');
+  }
+});
+
+btnShowQR.addEventListener('click', ()=> {
+  qrcodeDiv.hidden = !qrcodeDiv.hidden;
+});
+
+btnOpenWifi.addEventListener('click', ()=> {
+  // Попытка открыть настройки Wi-Fi на Android через intent. Работает в Chrome/Android.
+  const intent = "intent://#Intent;action=android.settings.WIFI_SETTINGS;end";
+  // Для iOS/других платформ — показать инструкцию
+  if (navigator.userAgent.toLowerCase().includes('android')) {
+    window.location.href = intent;
+  } else {
+    alert('Откройте настройки Wi-Fi вручную и выберите сеть: ' + ssidEl.textContent);
+  }
+});
+</script>
+</body>
+</html>
