@@ -74,18 +74,31 @@ function parseWifiQr(raw) {
 
 function parseFromText(text) {
   // простая эвристика: ищем строки с ssid или password
-  const lines = text.split('\\n').map(s=>s.trim()).filter(Boolean);
-  let s=null,p=null;
-  for (const ln of lines) {
-    const low = ln.toLowerCase();
-    if (!s && (low.includes('ssid') || low.includes('network') || low.includes('ssid:'))) {
-      s = ln.split(':').pop().trim();
+  const lines = text
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+  
+    let ssid = null;
+    let pass = null;
+  
+    for (const ln of lines) {
+      const low = ln.toLowerCase();
+  
+      // ищем WiFi SSID
+      if (low.startsWith('wifi ssid')) {
+        ssid = ln.replace(/wifi ssid/i, '').trim();
+        continue;
+      }
+  
+      // ищем WiFi PASSWORD
+      if (low.startsWith('wifi password')) {
+        pass = ln.replace(/wifi password/i, '').trim();
+        continue;
+      }
     }
-    if (!p && (low.includes('password') || low.includes('pass') || low.includes('pwd'))) {
-      p = ln.split(':').pop().trim();
-    }
-  }
-  return (s ? {ssid:s, pass:p||''} : null);
+  
+    return ssid ? { ssid, pass: pass || '' } : null;
 }
 
 async function startCamera() {
@@ -265,3 +278,4 @@ btnOpenWifi.addEventListener('click', ()=> {
 </script>
 </body>
 </html>
+
